@@ -69,9 +69,9 @@ def pinn(data_t, data_y, noise):
     N = tf.math.softplus(tf.Variable(0, trainable=True, dtype=tf.float32))
     A = tf.math.softplus(tf.Variable(0, trainable=True, dtype=tf.float32))
 
-    var_list = [J0, k1, k2, k3, k4, k5, k6, k, kappa, q, K1, psi, N, A]
+    var_list = [J0, k1, k2, k3, k4, k5, k6, k, kappa, q, K1, psi, N, A] # 14
 
-    def ODE(t, y):
+    def ODE(t, y): # residuals of the ODE
         v1 = k1 * y[:, 0:1] * y[:, 5:6] / (1 + tf.maximum(y[:, 5:6] / K1, 1e-3) ** q)
         v2 = k2 * y[:, 1:2] * (N - y[:, 4:5])
         v3 = k3 * y[:, 2:3] * (A - y[:, 5:6])
@@ -81,7 +81,7 @@ def pinn(data_t, data_y, noise):
         v7 = k * y[:, 6:7]
         J = kappa * (y[:, 3:4] - y[:, 6:7])
         return [
-            tf.gradients(y[:, 0:1], t)[0] - (J0 - v1),
+            tf.gradients(y[:, 0:1], t)[0] - (J0 - v1), # y[:, 0:6] is [S1, S2,..., S7]
             tf.gradients(y[:, 1:2], t)[0] - (2 * v1 - v2 - v6),
             tf.gradients(y[:, 2:3], t)[0] - (v2 - v3),
             tf.gradients(y[:, 3:4], t)[0] - (v3 - v4 - J),
@@ -92,12 +92,15 @@ def pinn(data_t, data_y, noise):
 
     geom = dde.geometry.TimeDomain(data_t[0, 0], data_t[-1, 0])
 
-    # Right point
+    # if points on the bondary (here refers to the time rightmost point)
     def boundary(x, _):
+        # print('x[0], data_t[-1, 0]:', x.shape, data_t.shape, x[0], data_t[-1, 0], \
+        #     np.isclose(x[0], data_t[-1, 0])) # x: time (1, ), data_t: time span (2000,)
         return np.isclose(x[0], data_t[-1, 0])
 
-    y1 = data_y[-1]
-    bc0 = dde.DirichletBC(geom, lambda X: y1[0], boundary, component=0)
+    y1 = data_y[-1] # [7,], last state [S1, S2, ..., S7]
+    # https://deepxde.readthedocs.io/en/latest/modules/deepxde.icbc.html#deepxde.icbc.boundary_conditions.DirichletBC
+    bc0 = dde.DirichletBC(geom, lambda X: y1[0], boundary, component=0) # (geom, func_BC, if_else_BC)
     bc1 = dde.DirichletBC(geom, lambda X: y1[1], boundary, component=1)
     bc2 = dde.DirichletBC(geom, lambda X: y1[2], boundary, component=2)
     bc3 = dde.DirichletBC(geom, lambda X: y1[3], boundary, component=3)
@@ -105,11 +108,11 @@ def pinn(data_t, data_y, noise):
     bc5 = dde.DirichletBC(geom, lambda X: y1[5], boundary, component=5)
     bc6 = dde.DirichletBC(geom, lambda X: y1[6], boundary, component=6)
 
-    # Observes
+    # sample observes from y4, y5
     n = len(data_t)
     idx = np.append(
         np.random.choice(np.arange(1, n - 1), size=n // 4, replace=False), [0, n - 1]
-    )
+    ) # 502
     ptset = dde.bc.PointSet(data_t[idx])
     inside = lambda x, _: ptset.inside(x)
     observe_y4 = dde.DirichletBC(
@@ -118,16 +121,16 @@ def pinn(data_t, data_y, noise):
     observe_y5 = dde.DirichletBC(
         geom, ptset.values_to_func(data_y[idx, 5:6]), inside, component=5
     )
-    np.savetxt("glycolysis_input.dat", np.hstack((data_t[idx], data_y[idx, 4:5], data_y[idx, 5:6])))
+    # np.savetxt("glycolysis_input.dat", np.hstack((data_t[idx], data_y[idx, 4:5], data_y[idx, 5:6])))
 
     data = dde.data.PDE(
         geom,
         ODE,
         [bc0, bc1, bc2, bc3, bc4, bc5, bc6, observe_y4, observe_y5],
         anchors=data_t,
-    )
+    ) # define y4, y5 measurements as Dirichlet BC
 
-    net = dde.maps.FNN([1] + [128] * 3 + [7], "swish", "Glorot normal")
+    net = dde.maps.FNN([1] + [128] * 3 + [7], "swish", "Glorot normal") # model
 
     def feature_transform(t):
         return tf.concat(
@@ -143,14 +146,14 @@ def pinn(data_t, data_y, noise):
             axis=1,
         )
 
-    net.apply_feature_transform(feature_transform)
+    net.apply_feature_transform(feature_transform) # feature layer
 
     def output_transform(t, y):
         return (
             data_y[0] + tf.math.tanh(t) * tf.constant([1, 1, 0.1, 0.1, 0.1, 1, 0.1]) * y
         )
 
-    net.apply_output_transform(output_transform)
+    net.apply_output_transform(output_transform) # scale output layer
 
     model = dde.Model(data, net)
 
@@ -162,10 +165,10 @@ def pinn(data_t, data_y, noise):
     )
     callbacks = [checkpointer, variable]
 
-    bc_weights = [1, 1, 10, 10, 10, 1, 10]
+    bc_weights = [1, 1, 10, 10, 10, 1, 10] # for 7 BC
     if noise >= 0.1:
         bc_weights = [w * 10 for w in bc_weights]
-    data_weights = [1e3, 1]
+    data_weights = [1e3, 1] # for 2 sample data
     # Large noise requires small data_weights
     if noise >= 0.1:
         data_weights = [w / 10 for w in data_weights]
@@ -183,7 +186,7 @@ def pinn(data_t, data_y, noise):
         disregard_previous_best=True,
         # model_restore_path="./model/model.ckpt-"
     )
-    dde.saveplot(losshistory, train_state, issave=True, isplot=True)
+    dde.saveplot(losshistory, train_state, issave=False, isplot=True)
     var_list = [model.sess.run(v) for v in var_list]
     return var_list
 
