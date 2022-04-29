@@ -3,6 +3,7 @@ from scipy.integrate import odeint
 
 import deepxde as dde
 from deepxde.backend import tf
+import logging
 
 
 def glycolysis_model(
@@ -204,8 +205,17 @@ def main():
         y[1:-1, :] += np.random.normal(0, std, (y.shape[0] - 2, y.shape[1]))
         np.savetxt("glycolysis_noise.dat", np.hstack((t, y)))
 
+    # logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    console_handler = logging.StreamHandler()
+    logger.addHandler(console_handler)
+
     # Train
     var_list = pinn(t, y, noise)
+    var_names = ['J0', 'k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k', 'kappa', 'q', 'K1', 'psi', 'N', 'A']
+    for name, v in zip(var_names, var_list):
+        logger.info(f'{name}: {v}\n')
 
     # Prediction
     y = glycolysis_model(np.ravel(t), *var_list)
@@ -213,4 +223,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.exit(main())
+    
